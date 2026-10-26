@@ -1,0 +1,4 @@
+# none - the whole project is Python standard library
+#
+# build-time only (not needed on the target):
+#   pip install nuitka ordered-set zstandard

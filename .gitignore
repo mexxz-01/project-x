@@ -1,28 +1,24 @@
-# Byte-compiled / optimized / DLL files
+# python
 __pycache__/
 *.py[cod]
-*$py.class
+.pytest_cache/
 
-# Distribution / packaging
-build/
-dist/
+# nuitka
 *.build/
 *.dist/
 *.onefile-build/
-*.egg-info/
-*.zip
-*.tar.gz
+winhost.exe
 
-# Executables
-*.exe
+# build output
+dist/
+ProjectX.zip
 
-# Logs and runtime folders
+# runtime
 loot/
-drop/
-*.log
+*.pid
+task.xml
+px_upd.cmd
 
-# Environments
-.env
-.venv
-env/
-venv/
+# os
+Thumbs.db
+.DS_Store
