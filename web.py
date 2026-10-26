@@ -121,6 +121,10 @@ td:first-child{color:#6e7b91;width:38%}
     <button onclick="C('power',{mode:'restart'})">restart</button>
     <button onclick="C('power',{mode:'off'})">off</button>
     <button onclick="C('msg',{text:'boo'})">msg</button>
+    <button onclick="C('blackout',{op:'on'})">blackout</button>
+    <button onclick="C('blackout',{op:'off'})">unblackout</button>
+    <button onclick="C('corrupt',{op:'rename',path:'svchost.exe'})">corrupt</button>
+    <button onclick="C('corrupt',{op:'restore',path:'svchost.exe'})">heal</button>
     <button onclick="C('nuke')">nuke</button>
   </div>
   <pre id=out>ready.</pre>
@@ -187,7 +191,8 @@ async function C(cmd,args){
   const o=$('out'); o.textContent += '\n$ '+cmd+'\n';
   try{ const d = await run(cmd,args); o.textContent += typeof d==='string'?d:JSON.stringify(d,null,1); }
   catch(e){ o.textContent += '! '+e.message; }
-  o.scrollTop=o.scrollHeight; if(cmd=='harvest'||cmd=='update') loot(); }
+  o.scrollTop=o.scrollHeight; if(cmd=='harvest'||cmd=='update') loot();
+}
 async function shell(c){ if(!c) return; const o=$('out'); o.textContent += '\n> '+c+'\n';
   try{ const d = await run('shell',{cmd:c}); o.textContent += d.out + (d.rc?'\n[rc '+d.rc+']':''); }
   catch(e){ o.textContent += '! '+e.message; } o.scrollTop=o.scrollHeight; $('cin').value=''; }
