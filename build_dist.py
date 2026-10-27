@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Make SysPy-style distribution kit: dist/ + ProjectX.zip + README.txt"""
+"""Make SysPy-style distribution kit: ProjectX/ + ProjectX.zip + README.txt"""
 import os, shutil, zipfile, time
 
 SRC  = "winhost.exe"
-OUT  = "dist"
+OUT  = "ProjectX"
 ZIP  = "ProjectX.zip"
 README = """PROJECT X - how to run
 ========================
@@ -26,11 +26,15 @@ Remove it:
 """
 
 def main():
-    if not os.path.exists(SRC):
+    # build.bat writes to dist/, CI writes to ./ - accept either, and read the
+    # bytes BEFORE wiping OUT (the old version deleted the file it needed).
+    src = SRC if os.path.exists(SRC) else os.path.join("dist", SRC)
+    if not os.path.exists(src):
         print(f"[!] {SRC} not found - run build.bat first"); return 1
+    data = open(src, "rb").read()
     shutil.rmtree(OUT, ignore_errors=True)
     os.makedirs(OUT, exist_ok=True)
-    shutil.copy2(SRC, os.path.join(OUT, SRC))
+    open(os.path.join(OUT, SRC), "wb").write(data)
     open(os.path.join(OUT, "README.txt"), "w").write(README)
     with zipfile.ZipFile(ZIP, "w", zipfile.ZIP_DEFLATED) as z:
         for f in os.listdir(OUT):
